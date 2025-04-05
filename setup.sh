@@ -2,28 +2,35 @@
 
 # Script untuk menginstall dan mengkonfigurasi Nginx dengan domain dinamis
 # Untuk Ubuntu 22.04
+# Dengan dukungan reverse proxy ke container Docker
 
 # Exit script jika terjadi error
 set -e
 
 # Fungsi untuk menampilkan cara penggunaan
 usage() {
-    echo "Penggunaan: $0 --domain=nama.domain.com [--ssl] [--email=email@domain.com]"
+    echo "Penggunaan: $0 --domain=nama.domain.com [--ssl] [--email=email@domain.com] [--proxy=container:port]"
     echo ""
     echo "Opsi:"
     echo "  --domain=DOMAIN      Domain yang akan dikonfigurasi (wajib)"
     echo "  --ssl                Install sertifikat SSL dengan Certbot (opsional)"
     echo "  --email=EMAIL        Email untuk pendaftaran Let's Encrypt (opsional, diperlukan jika menggunakan --ssl)"
+    echo "  --proxy=PROXY        Container dan port tujuan untuk reverse proxy (format: nama_container:port)"
+    echo "                       Contoh: --proxy=webapp:3000"
     echo ""
     echo "Contoh:"
     echo "  $0 --domain=wapi.lukmanbagus.com"
     echo "  $0 --domain=wapi.lukmanbagus.com --ssl --email=admin@lukmanbagus.com"
+    echo "  $0 --domain=wapi.lukmanbagus.com --proxy=app:8080"
+    echo "  $0 --domain=wapi.lukmanbagus.com --ssl --email=admin@lukmanbagus.com --proxy=webapp:3000"
     exit 1
 }
 
 # Default values
 INSTALL_SSL=false
 EMAIL=""
+USE_PROXY=false
+PROXY_TARGET=""
 
 # Parse command line arguments
 for arg in "$@"; do
@@ -36,6 +43,10 @@ for arg in "$@"; do
             ;;
         --email=*)
             EMAIL="${arg#*=}"
+            ;;
+        --proxy=*)
+            USE_PROXY=true
+            PROXY_TARGET="${arg#*=}"
             ;;
         --help|-h)
             usage
@@ -56,6 +67,20 @@ fi
 if [ "$INSTALL_SSL" = true ] && [ -z "$EMAIL" ]; then
     echo "Error: Parameter email wajib diisi saat menggunakan opsi --ssl"
     usage
+fi
+
+if [ "$USE_PROXY" = true ]; then
+    # Validasi format proxy
+    if ! [[ "$PROXY_TARGET" =~ ^[a-zA-Z0-9_-]+:[0-9]+$ ]]; then
+        echo "Error: Format proxy salah. Gunakan format: nama_container:port"
+        usage
+    fi
+    
+    # Extract container name and port
+    CONTAINER_NAME=$(echo $PROXY_TARGET | cut -d: -f1)
+    CONTAINER_PORT=$(echo $PROXY_TARGET | cut -d: -f2)
+    
+    echo "Reverse proxy akan dikonfigurasi ke container $CONTAINER_NAME port $CONTAINER_PORT"
 fi
 
 # Pastikan script dijalankan sebagai root
@@ -93,15 +118,16 @@ if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
     ufw allow 'Nginx Full'
 fi
 
-# Membuat direktori untuk website
-echo "Membuat direktori untuk website..."
-mkdir -p /var/www/$DOMAIN
-chown -R www-data:www-data /var/www/$DOMAIN
-chmod -R 755 /var/www/$DOMAIN
+# Membuat direktori untuk website (jika tidak menggunakan proxy)
+if [ "$USE_PROXY" = false ]; then
+    echo "Membuat direktori untuk website..."
+    mkdir -p /var/www/$DOMAIN
+    chown -R www-data:www-data /var/www/$DOMAIN
+    chmod -R 755 /var/www/$DOMAIN
 
-# Membuat halaman HTML sederhana untuk pengujian
-echo "Membuat halaman HTML pengujian..."
-cat > /var/www/$DOMAIN/index.html << EOF
+    # Membuat halaman HTML sederhana untuk pengujian
+    echo "Membuat halaman HTML pengujian..."
+    cat > /var/www/$DOMAIN/index.html << EOF
 <!DOCTYPE html>
 <html>
 <head>
@@ -131,10 +157,41 @@ cat > /var/www/$DOMAIN/index.html << EOF
 </body>
 </html>
 EOF
+fi
 
-# Membuat konfigurasi server block Nginx
+# Membuat konfigurasi server block Nginx (dengan atau tanpa reverse proxy)
 echo "Membuat konfigurasi server block Nginx..."
-cat > /etc/nginx/sites-available/$DOMAIN << EOF
+
+if [ "$USE_PROXY" = true ]; then
+    # Konfigurasi dengan reverse proxy ke container Docker
+    cat > /etc/nginx/sites-available/$DOMAIN << EOF
+server {
+    listen 80;
+    listen [::]:80;
+
+    server_name $DOMAIN;
+
+    access_log /var/log/nginx/${DOMAIN}_access.log;
+    error_log /var/log/nginx/${DOMAIN}_error.log;
+
+    location / {
+        proxy_pass http://${CONTAINER_NAME}:${CONTAINER_PORT};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_buffering off;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+EOF
+
+    echo "Reverse proxy dikonfigurasi ke container ${CONTAINER_NAME}:${CONTAINER_PORT}"
+else
+    # Konfigurasi standar untuk serving static files
+    cat > /etc/nginx/sites-available/$DOMAIN << EOF
 server {
     listen 80;
     listen [::]:80;
@@ -147,10 +204,11 @@ server {
         try_files \$uri \$uri/ =404;
     }
 
-    access_log /var/log/nginx/$DOMAIN\_access.log;
-    error_log /var/log/nginx/$DOMAIN\_error.log;
+    access_log /var/log/nginx/${DOMAIN}_access.log;
+    error_log /var/log/nginx/${DOMAIN}_error.log;
 }
 EOF
+fi
 
 # Mengaktifkan server block
 echo "Mengaktifkan server block..."
@@ -179,10 +237,31 @@ if [ "$INSTALL_SSL" = true ]; then
     echo "Sertifikat SSL berhasil dipasang."
 fi
 
+# Menampilkan informasi tentang Docker network jika menggunakan proxy
+if [ "$USE_PROXY" = true ]; then
+    echo ""
+    echo "PENTING: Pastikan container Docker ${CONTAINER_NAME} dapat diakses oleh Nginx."
+    echo "Jika menggunakan Docker Compose, pastikan service bernama ${CONTAINER_NAME} sudah dijalankan."
+    echo "Jika menggunakan Docker standalone, pastikan container berjalan dengan nama ${CONTAINER_NAME}."
+    echo ""
+    echo "Untuk memastikan konektivitas, pastikan container tersebut berada dalam network yang sama dengan host,"
+    echo "atau gunakan opsi network_mode: 'host' di Docker Compose, atau buat custom bridge network."
+    echo ""
+    echo "Contoh menghubungkan container ke network host secara manual:"
+    echo "  docker network connect host ${CONTAINER_NAME}"
+    echo ""
+fi
+
 echo "==============================================================="
 echo "Setup selesai! Nginx telah dikonfigurasi untuk $DOMAIN"
 echo "Pastikan DNS A record untuk $DOMAIN mengarah ke IP server ini."
-echo "Halaman pengujian tersedia di: http://$DOMAIN"
+
+if [ "$USE_PROXY" = true ]; then
+    echo "Reverse proxy dikonfigurasi ke container ${CONTAINER_NAME}:${CONTAINER_PORT}"
+else
+    echo "Halaman pengujian tersedia di: http://$DOMAIN"
+fi
+
 if [ "$INSTALL_SSL" = true ]; then
     echo "Site juga tersedia dengan HTTPS: https://$DOMAIN"
 else

@@ -32,7 +32,23 @@ git clone git@github.com:lukmanbagus/nginx-setup.git && cd nginx-setup
 ```
 chmod +x setup.sh
 ```
-### 3. Run script with enter your domain and email to install SSL
+### 3. Run script with:
+#### A. Standard nginx installation
 ```
-sudo ./setup.sh --domain=yourdomain.com --ssl --email=your@email.com
+sudo ./script.sh --domain=yourdomain.com
+```
+
+#### B. Nginx installation with SSL
+```
+sudo ./script.sh --domain=yourdomain.com --ssl --email=email@yourdomain.com
+```
+
+#### C. Nginx installation with reverse proxy
+```
+sudo ./script.sh --domain=yourdomain.com --proxy=webapp:3000
+```
+
+#### D. Nginx installation with SSL and reverse proxy
+```
+sudo ./script.sh --domain=yourdomain.com --ssl --email=email@yourdomain.com --proxy=webapp:3000
 ```
