@@ -26,7 +26,7 @@ This script automates the process of setting up a new website with Nginx on Ubun
 ## Usage
 ### 1. Clone repo
 ```
-git clone git@github.com:lukmanbagus/nginx-setup.git && cd nginx-setup
+git clone https://github.com/lukmanbagus/nginx-setup.git && cd nginx-setup
 ```
 ### 2. Add executable
 ```
