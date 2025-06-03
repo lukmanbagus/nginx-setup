@@ -35,20 +35,20 @@ chmod +x setup.sh
 ### 3. Run script with:
 #### A. Standard nginx installation
 ```
-sudo ./script.sh --domain=yourdomain.com
+sudo ./setup.sh --domain=yourdomain.com
 ```
 
 #### B. Nginx installation with SSL
 ```
-sudo ./script.sh --domain=yourdomain.com --ssl --email=email@yourdomain.com
+sudo ./setup.sh --domain=yourdomain.com --ssl --email=email@yourdomain.com
 ```
 
 #### C. Nginx installation with reverse proxy
 ```
-sudo ./script.sh --domain=yourdomain.com --proxy=webapp:3000
+sudo ./setup.sh --domain=yourdomain.com --proxy=webapp:3000
 ```
 
 #### D. Nginx installation with SSL and reverse proxy
 ```
-sudo ./script.sh --domain=yourdomain.com --ssl --email=email@yourdomain.com --proxy=webapp:3000
+sudo ./setup.sh --domain=yourdomain.com --ssl --email=email@yourdomain.com --proxy=webapp:3000
 ```
