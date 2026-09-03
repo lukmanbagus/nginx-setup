@@ -105,6 +105,33 @@ SSHD_CONFIG_D="/etc/ssh/sshd_config.d/99-disable-password-auth.conf"
 KEY_CHECK_USER="${SUDO_USER:-root}"
 KEY_CHECK_HOME=$(eval echo "~${KEY_CHECK_USER}")
 
+# Tanyakan dulu apakah user ingin memasukkan SSH public key ke authorized_keys
+read -rp "Apakah Anda ingin memasukkan SSH public key Anda ke authorized_keys sekarang? (y/n): " ADD_KEY_ANSWER
+
+if [[ "$ADD_KEY_ANSWER" =~ ^[Yy]$ ]]; then
+    read -rp "Tempelkan SSH public key Anda (contoh: ssh-ed25519 AAAA... user@host): " SSH_PUBLIC_KEY
+
+    if [ -n "$SSH_PUBLIC_KEY" ]; then
+        mkdir -p "${KEY_CHECK_HOME}/.ssh"
+        touch "${KEY_CHECK_HOME}/.ssh/authorized_keys"
+
+        if grep -qF "$SSH_PUBLIC_KEY" "${KEY_CHECK_HOME}/.ssh/authorized_keys" 2>/dev/null; then
+            echo "Key ini sudah ada di authorized_keys, tidak ditambahkan lagi."
+        else
+            echo "$SSH_PUBLIC_KEY" >> "${KEY_CHECK_HOME}/.ssh/authorized_keys"
+            echo "Key berhasil ditambahkan ke ${KEY_CHECK_HOME}/.ssh/authorized_keys"
+        fi
+
+        chmod 700 "${KEY_CHECK_HOME}/.ssh"
+        chmod 600 "${KEY_CHECK_HOME}/.ssh/authorized_keys"
+        chown -R "${KEY_CHECK_USER}:${KEY_CHECK_USER}" "${KEY_CHECK_HOME}/.ssh"
+    else
+        echo "Tidak ada key yang dimasukkan, melewati penambahan key."
+    fi
+else
+    echo "Melewati penambahan SSH key, melanjutkan proses..."
+fi
+
 if [ ! -s "${KEY_CHECK_HOME}/.ssh/authorized_keys" ]; then
     echo "PERINGATAN: Tidak ditemukan file authorized_keys untuk user '${KEY_CHECK_USER}'."
     echo "Menonaktifkan password authentication SEKARANG berisiko mengunci Anda dari server ini."
