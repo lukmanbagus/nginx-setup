@@ -1,54 +1,93 @@
-# Nginx Domain Setup Script
-A bash script for automatically installing and configuring Nginx web server with custom domain settings on Ubuntu 22.04.
+# Server Setup Wizard
 
-## Overview
-This script automates the process of setting up a new website with Nginx on Ubuntu 22.04. It handles the entire workflow from installing Nginx, creating the necessary directory structure, configuring server blocks, and optionally setting up SSL certificates using Let's Encrypt.
+Script Bash interaktif untuk menyiapkan server kosong (bare server) dari nol.
+Mendeteksi OS/distro secara otomatis lalu menuntun Anda melalui wizard step-by-step:
+update sistem, hardening dasar, dan instalasi aplikasi pilihan.
 
-## Features
+## Fitur
 
-- Dynamically configure any domain name
-- Automatic Nginx installation and configuration
-- Creation of website directory structure with proper permissions
-- Generation of a basic HTML test page
-- Configuration of Nginx server blocks
-- Automatic firewall configuration (if UFW is active)
-- Optional SSL certificate installation via Let's Encrypt/Certbot
-- Interactive confirmation before installation begins
-- Comprehensive validation of required parameters
+- **Deteksi OS otomatis** di awal wizard (distro, versi, family, package manager, init system)
+- **Menu multi-select interaktif** — navigasi panah ↑/↓, SPASI untuk pilih, ENTER lanjut,
+  `A` pilih semua, `N` kosongkan
+- **Kompatibel banyak distro Linux**: Debian, Ubuntu, RedHat (RHEL), Fedora, Arch,
+  Alpine, OpenSUSE, FreeBSD, CentOS, RockyLinux, AlmaLinux, Oracle Linux, Manjaro, dll.
+- **Hardening dasar** (opsional, multi-select):
+  - Firewall (membuka SSH/HTTP/HTTPS) — UFW / firewalld / iptables / pf sesuai distro
+  - SSH Hardening (menonaktifkan password authentication, drop-in sshd config)
+  - Fail2ban (proteksi brute-force SSH)
+- **Instalasi aplikasi** pilihan:
+  - Docker (+ Docker Compose)
+  - Dokploy
+  - Portainer
+  - CyberPanel
+  - CloudPanel
+  - FastPanel
+  - HestiaCP
+  - aaPanel
+- **Penanganan dependensi otomatis** — Dokploy & Portainer membutuhkan Docker;
+  script akan menawarkan menambahkan Docker bila belum dipilih.
+- **Verifikasi instalasi** di akhir (status Docker, Fail2ban, Firewall, SSH)
 
-## Requirements
+## Persyaratan
 
-- Ubuntu 22.04 LTS (Jammy Jellyfish)
-- Root or sudo privileges
-- Internet connection for package installation
-- Domain with DNS A record pointing to your server's IP address
+- Server Linux/FreeBSD dengan distro yang didukung
+- Root atau sudo privileges
+- Koneksi internet untuk instalasi paket
 
-## Usage
+## Penggunaan
+
 ### 1. Clone repo
-```
+```bash
 git clone https://github.com/lukmanbagus/nginx-setup.git && cd nginx-setup
 ```
-### 2. Add executable
-```
+
+### 2. Beri permission eksekusi
+```bash
 chmod +x setup.sh
 ```
-### 3. Run script with:
-#### A. Standard nginx installation
-```
-sudo ./setup.sh --domain=yourdomain.com
+
+### 3. Jalankan wizard
+```bash
+sudo ./setup.sh
 ```
 
-#### B. Nginx installation with SSL
-```
-sudo ./setup.sh --domain=yourdomain.com --ssl --email=email@yourdomain.com
-```
+Ikuti wizard step-by-step:
+1. Pengecekan OS ditampilkan
+2. Konfirmasi update & upgrade sistem
+3. Pilih hardening dasar (multi-select, semua aktif by default)
+4. Pilih aplikasi yang ingin diinstall (multi-select)
+5. Konfirmasi ringkasan pilihan
+6. Eksekusi instalasi
+7. Verifikasi
 
-#### C. Nginx installation with reverse proxy
-```
-sudo ./setup.sh --domain=yourdomain.com --proxy=webapp:3000
-```
+### Navigasi menu
+| Tombol  | Aksi                          |
+|---------|-------------------------------|
+| ↑ / ↓   | Navigasi antar opsi           |
+| Spasi   | Toggle pilih / batal pilih    |
+| Enter   | Lanjut ke step berikutnya     |
+| A       | Pilih semua                   |
+| N       | Kosongkan semua               |
 
-#### D. Nginx installation with SSL and reverse proxy
-```
-sudo ./setup.sh --domain=yourdomain.com --ssl --email=email@yourdomain.com --proxy=webapp:3000
-```
+## Catatan kompatibilitas per distro
+
+| Distro            | Firewall      | Docker native | Panel yang didukung            |
+|-------------------|---------------|---------------|--------------------------------|
+| Debian / Ubuntu   | UFW           | Ya            | Semua                          |
+| RHEL / CentOS / Rocky / Alma | firewalld | Ya   | CyberPanel, aaPanel            |
+| Fedora            | firewalld     | Ya            | CyberPanel, aaPanel            |
+| Arch / Manjaro    | UFW           | Ya            | Docker (panel umumnya Debian-only) |
+| Alpine            | iptables      | Ya (apk)      | Docker (panel umumnya Debian-only) |
+| OpenSUSE          | firewalld     | Ya            | Docker (panel umumnya Debian-only) |
+| FreeBSD           | pf            | Tidak native  | Tidak didukung (Docker)        |
+
+> Catatan: CyberPanel, CloudPanel, FastPanel, HestiaCP, dan aaPanel secara resmi
+> hanya mendukung Debian/Ubuntu (dan beberapa untuk RHEL family). Script akan
+> memperingatkan bila Anda memilih panel pada distro yang tidak didukung.
+
+## Peringatan keamanan
+
+Saat SSH hardening diaktifkan, password authentication dinonaktifkan. Pastikan Anda
+telah menambahkan SSH public key dan dapat login via key **sebelum** menutup sesi
+terminal. Script akan memeriksa keberadaan `authorized_keys` dan menolak menonaktifkan
+password auth bila belum ada key sama sekali.
