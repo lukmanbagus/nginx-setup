@@ -55,6 +55,11 @@ INIT_SYSTEM="systemd"     # systemd | openrc | bsd-init
 # Hasil pilihan menu (array of index)
 MENU_RESULT=()
 
+# Entry reverse proxy (parallel arrays, diisi saat wizard)
+RP_DOMAINS=()
+RP_TARGETS=()       # format: container:port  atau  host:port
+RP_WEBSERVERS=()    # nginx | apache
+
 # ──────────────────────────────────────────────────────────────────────────────
 #  Helper output
 # ──────────────────────────────────────────────────────────────────────────────
@@ -630,6 +635,186 @@ install_aapanel() {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
+#  Reverse Proxy (Nginx / Apache) multi-distro
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Nama service apache sesuai distro
+apache_svc_name() {
+    case "$DISTRO_FAMILY" in
+        debian|alpine) echo apache2 ;;
+        freebsd)       echo apache24 ;;
+        *)             echo httpd ;;
+    esac
+}
+
+# Pasang & aktifkan web server bila belum ada
+install_webserver() { # $1 = nginx|apache
+    case "$1" in
+        nginx)
+            if ! command -v nginx >/dev/null 2>&1; then
+                pkg_install nginx
+            fi
+            svc_enable nginx
+            ;;
+        apache)
+            local svc; svc="$(apache_svc_name)"
+            if ! command -v apache2 >/dev/null 2>&1 && ! command -v httpd >/dev/null 2>&1; then
+                case "$DISTRO_FAMILY" in
+                    debian)  pkg_install apache2 ;;
+                    rhel|suse) pkg_install httpd ;;
+                    arch)    pkg_install apache ;;
+                    alpine)  pkg_install apache2 ;;
+                    freebsd) pkg_install apache24 ;;
+                    *)       log_error "Apache belum didukung otomatis untuk $OS_NAME"; return 1 ;;
+                esac
+            fi
+            svc_enable "$svc"
+            ;;
+    esac
+}
+
+# Pastikan port HTTP/HTTPS terbuka di firewall (apa pun distro)
+web_open_ports() {
+    case "$DISTRO_FAMILY" in
+        debian)
+            command -v ufw >/dev/null 2>&1 && { ufw allow http 2>/dev/null; ufw allow https 2>/dev/null; } || true
+            ;;
+        rhel|suse)
+            command -v firewall-cmd >/dev/null 2>&1 && {
+                firewall-cmd --permanent --add-service=http  2>/dev/null || true
+                firewall-cmd --permanent --add-service=https 2>/dev/null || true
+                firewall-cmd --reload 2>/dev/null || true
+            } || true
+            ;;
+        arch)
+            command -v ufw >/dev/null 2>&1 && { ufw allow http 2>/dev/null; ufw allow https 2>/dev/null; } || true
+            ;;
+        alpine)
+            iptables -C INPUT -p tcp --dport 80  -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 80  -j ACCEPT 2>/dev/null || true
+            iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
+            ;;
+        freebsd)
+            pfctl -f /etc/pf.conf 2>/dev/null || true
+            ;;
+    esac
+}
+
+# Tulis konfigurasi reverse proxy Nginx untuk satu domain
+configure_nginx_proxy() { # $1=domain $2=target(container:port)
+    local domain="$1" target="$2" conf
+    case "$DISTRO_FAMILY" in
+        debian)
+            mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+            conf="/etc/nginx/sites-available/$domain"
+            ;;
+        freebsd)
+            mkdir -p /usr/local/etc/nginx/conf.d
+            conf="/usr/local/etc/nginx/conf.d/$domain.conf"
+            ;;
+        *)
+            mkdir -p /etc/nginx/conf.d
+            conf="/etc/nginx/conf.d/$domain.conf"
+            ;;
+    esac
+
+    cat > "$conf" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+
+    server_name $domain;
+
+    access_log /var/log/nginx/${domain}_access.log;
+    error_log  /var/log/nginx/${domain}_error.log;
+
+    location / {
+        proxy_pass http://$target;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_buffering off;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+EOF
+
+    # Untuk Debian/Ubuntu, enable site via symlink
+    [ "$DISTRO_FAMILY" = "debian" ] && ln -sf "$conf" "/etc/nginx/sites-enabled/$domain"
+
+    if nginx -t 2>/dev/null; then
+        svc_restart nginx
+        log_ok "Nginx reverse proxy: $domain -> http://$target"
+    else
+        log_error "Konfigurasi nginx tidak valid untuk $domain. Periksa: nginx -t"
+        nginx -t 2>&1 | sed 's/^/    /'
+    fi
+}
+
+# Tulis konfigurasi reverse proxy Apache untuk satu domain
+configure_apache_proxy() { # $1=domain $2=target(container:port)
+    local domain="$1" target="$2" conf svc
+    svc="$(apache_svc_name)"
+    case "$DISTRO_FAMILY" in
+        debian)
+            mkdir -p /etc/apache2/sites-available
+            conf="/etc/apache2/sites-available/$domain.conf"
+            a2enmod proxy proxy_http proxy_wstunnel 2>/dev/null || true
+            ;;
+        freebsd)
+            mkdir -p /usr/local/etc/apache24/Includes
+            conf="/usr/local/etc/apache24/Includes/$domain.conf"
+            ;;
+        *)
+            mkdir -p /etc/httpd/conf.d
+            conf="/etc/httpd/conf.d/$domain.conf"
+            ;;
+    esac
+
+    cat > "$conf" <<EOF
+<VirtualHost *:80>
+    ServerName $domain
+
+    ProxyPreserveHost On
+    ProxyPass / http://$target/
+    ProxyPassReverse / http://$target/
+    RequestHeader set X-Forwarded-Proto "http"
+
+    ErrorLog \${APACHE_LOG_DIR:-/var/log/${svc}}/${domain}_error.log
+    CustomLog \${APACHE_LOG_DIR:-/var/log/${svc}}/${domain}_access.log combined
+</VirtualHost>
+EOF
+
+    [ "$DISTRO_FAMILY" = "debian" ] && a2ensite "$domain" 2>/dev/null || true
+
+    if apache2ctl -t 2>/dev/null || httpd -t 2>/dev/null || apachectl configtest 2>/dev/null; then
+        svc_restart "$svc"
+        log_ok "Apache reverse proxy: $domain -> http://$target"
+    else
+        log_error "Konfigurasi apache tidak valid untuk $domain. Periksa manual."
+    fi
+}
+
+# Eksekusi semua entry reverse proxy
+setup_reverse_proxy_entries() {
+    [ ${#RP_DOMAINS[@]} -eq 0 ] && return 0
+    log_step "Konfigurasi Reverse Proxy"
+    web_open_ports
+    local idx
+    for ((idx=0; idx<${#RP_DOMAINS[@]}; idx++)); do
+        local d="${RP_DOMAINS[idx]}" t="${RP_TARGETS[idx]}" w="${RP_WEBSERVERS[idx]}"
+        log_info "Menyiapkan: $d -> $t ($w)"
+        install_webserver "$w" || { log_warn "Gagal memasang $w, skip $d"; continue; }
+        case "$w" in
+            nginx) configure_nginx_proxy   "$d" "$t" ;;
+            apache) configure_apache_proxy "$d" "$t" ;;
+        esac
+    done
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
 #  Verifikasi
 # ──────────────────────────────────────────────────────────────────────────────
 verify_installation() {
@@ -658,6 +843,19 @@ verify_installation() {
     esac
 
     echo -e "${GREEN}SSH PassAuth:${NC} $(grep -Ri 'PasswordAuthentication' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | tail -1 || echo 'default')"
+
+    if command -v nginx >/dev/null 2>&1; then
+        echo -e "${GREEN}Nginx:${NC}      $(nginx -v 2>&1)"
+    fi
+    if command -v apache2 >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1; then
+        echo -e "${GREEN}Apache:${NC}     terinstall ($(apache_svc_name 2>/dev/null || echo httpd))"
+    fi
+    if [ ${#RP_DOMAINS[@]} -gt 0 ]; then
+        echo -e "${GREEN}Reverse Proxy:${NC} ${#RP_DOMAINS[@]} entry"
+        for ((rp_i=0; rp_i<${#RP_DOMAINS[@]}; rp_i++)); do
+            echo "    - ${RP_DOMAINS[rp_i]} -> ${RP_TARGETS[rp_i]} (${RP_WEBSERVERS[rp_i]})"
+        done
+    fi
     echo "------------------------------------------------------------"
 }
 
@@ -720,6 +918,43 @@ main() {
     # Helper: cek apakah index dipilih
     _is_selected() { local t="$1" k; for k in "$@"; do [ "$k" = "$t" ] && return 0; done; return 1; }
 
+    # 6. Reverse proxy (opsional, multi-entry: domain + container:port + web server)
+    if confirm "Setup reverse proxy sekarang? (domain + container:port + pilih web server)" "n"; then
+        while true; do
+            echo ""
+            echo -e "${BOLD}Reverse proxy #${#RP_DOMAINS[@]}${NC}"
+            # domain
+            while true; do
+                read -rp "  Domain (mis. app.example.com): " rp_domain </dev/tty
+                if [[ "$rp_domain" =~ ^[a-zA-Z0-9._-]+$ ]] && [ -n "$rp_domain" ]; then break; fi
+                echo "  Domain tidak valid, coba lagi."
+            done
+            # target container:port / host:port
+            while true; do
+                read -rp "  Target container:port (mis. webapp:3000 / 127.0.0.1:8080): " rp_target </dev/tty
+                if [[ "$rp_target" =~ ^[a-zA-Z0-9._-]+:[0-9]+$ ]]; then break; fi
+                echo "  Format salah. Gunakan: host:port atau container:port"
+            done
+            # pilih web server
+            echo "  Pilih web server:"
+            echo "    1) Nginx"
+            echo "    2) Apache"
+            while true; do
+                read -rp "  Pilihan [1/2] (default 1): " rp_ws </dev/tty
+                rp_ws="${rp_ws:-1}"
+                case "$rp_ws" in
+                    1) rp_ws="nginx";  break ;;
+                    2) rp_ws="apache"; break ;;
+                    *) echo "  Pilihan tidak valid, coba lagi." ;;
+                esac
+            done
+            RP_DOMAINS+=("$rp_domain")
+            RP_TARGETS+=("$rp_target")
+            RP_WEBSERVERS+=("$rp_ws")
+            confirm "Tambah reverse proxy lagi?" "n" || break
+        done
+    fi
+
     # Tampilkan ringkasan pilihan
     echo ""
     log_step "Ringkasan pilihan"
@@ -732,6 +967,14 @@ main() {
         echo "  (tidak ada aplikasi dipilih)"
     else
         for i in "${MENU_RESULT[@]}"; do echo "  - ${APP_LABELS[i]}"; done
+    fi
+    echo -e "${BOLD}Reverse Proxy:${NC}"
+    if [ ${#RP_DOMAINS[@]} -eq 0 ]; then
+        echo "  (tidak ada)"
+    else
+        for ((rp_i=0; rp_i<${#RP_DOMAINS[@]}; rp_i++)); do
+            echo "  - ${RP_DOMAINS[rp_i]} -> ${RP_TARGETS[rp_i]} (${RP_WEBSERVERS[rp_i]})"
+        done
     fi
     echo ""
 
@@ -782,6 +1025,9 @@ main() {
             "aaPanel")    install_aapanel    || log_warn "aaPanel gagal/terlewat" ;;
         esac
     done
+
+    # ─── Eksekusi reverse proxy ───
+    setup_reverse_proxy_entries
 
     # ─── Verifikasi ───
     verify_installation

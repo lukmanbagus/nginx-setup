@@ -24,9 +24,16 @@ update sistem, hardening dasar, dan instalasi aplikasi pilihan.
   - FastPanel
   - HestiaCP
   - aaPanel
+- **Reverse proxy** (opsional, multi-entry) — untuk setiap entry diminta:
+  - Domain (mis. `app.example.com`)
+  - Target `container:port` atau `host:port` (mis. `webapp:3000`, `127.0.0.1:8080`)
+  - Pilihan web server: **Nginx** atau **Apache**
+  - Otomatis memasang web server, menulis virtualhost/server-block,
+    membuka port HTTP/HTTPS di firewall, dan reload service
 - **Penanganan dependensi otomatis** — Dokploy & Portainer membutuhkan Docker;
   script akan menawarkan menambahkan Docker bila belum dipilih.
-- **Verifikasi instalasi** di akhir (status Docker, Fail2ban, Firewall, SSH)
+- **Verifikasi instalasi** di akhir (status Docker, Fail2ban, Firewall, SSH,
+  web server, dan daftar reverse proxy)
 
 ## Persyaratan
 
@@ -56,9 +63,10 @@ Ikuti wizard step-by-step:
 2. Konfirmasi update & upgrade sistem
 3. Pilih hardening dasar (multi-select, semua aktif by default)
 4. Pilih aplikasi yang ingin diinstall (multi-select)
-5. Konfirmasi ringkasan pilihan
-6. Eksekusi instalasi
-7. Verifikasi
+5. Setup reverse proxy (opsional, multi-entry: domain + container:port + web server)
+6. Konfirmasi ringkasan pilihan
+7. Eksekusi instalasi
+8. Verifikasi
 
 ### Navigasi menu
 | Tombol  | Aksi                          |
@@ -83,7 +91,28 @@ Ikuti wizard step-by-step:
 
 > Catatan: CyberPanel, CloudPanel, FastPanel, HestiaCP, dan aaPanel secara resmi
 > hanya mendukung Debian/Ubuntu (dan beberapa untuk RHEL family). Script akan
-> memperingatkan bila Anda memilih panel pada distro yang tidak didukung.
+> memperingatkan bila Anda memilih panel pada distro yang tidak di dukung.
+
+## Reverse proxy & jaringan container
+
+Reverse proxy diarahkan ke `container:port` atau `host:port`. Agar web server di
+host dapat menjangkau container Docker **berdasarkan nama**, pastikan:
+- Container berada dalam Docker network yang sama dengan host, atau
+- Gunakan `network_mode: host` di Docker Compose, atau
+- Proxy ke `127.0.0.1:PORT` (port yang dipublikasikan container ke host).
+
+Konfigurasi yang ditulis script:
+- **Nginx**: `server` block dengan `proxy_pass` + header websocket (Upgrade/Connection)
+  - Debian/Ubuntu: `/etc/nginx/sites-available/<domain>` + symlink di `sites-enabled`
+  - RHEL/CentOS/Rocky/Alma/Fedora/Arch/Alpine/SUSE: `/etc/nginx/conf.d/<domain>.conf`
+  - FreeBSD: `/usr/local/etc/nginx/conf.d/<domain>.conf`
+- **Apache**: `<VirtualHost *:80>` dengan `ProxyPass`/`ProxyPassReverse` + `ProxyPreserveHost`
+  - Debian/Ubuntu: `/etc/apache2/sites-available/<domain>.conf` + `a2ensite` + modul `proxy*`
+  - RHEL family/SUSE: `/etc/httpd/conf.d/<domain>.conf`
+  - FreeBSD: `/usr/local/etc/apache24/Includes/<domain>.conf`
+
+> Tip: reverse proxy di sini hanya HTTP (port 80). Untuk HTTPS, jalankan
+> Certbot setelahnya terhadap domain yang sudah dikonfigurasi.
 
 ## Peringatan keamanan
 
