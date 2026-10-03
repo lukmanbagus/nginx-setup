@@ -264,13 +264,13 @@ checklist_menu() {
             redraw=0
         fi
 
-        read -rsn1 key </dev/tty || true
+        IFS= read -rsn1 key </dev/tty || true
         case "$key" in
             $'\x1b')
                 # kemungkinan escape sequence panah
-                read -rsn1 -t 0.1 key2 </dev/tty || key2=""
+                IFS= read -rsn1 -t 0.1 key2 </dev/tty || key2=""
                 if [ "$key2" = "[" ]; then
-                    read -rsn1 -t 0.1 key2 </dev/tty || key2=""
+                    IFS= read -rsn1 -t 0.1 key2 </dev/tty || key2=""
                     case "$key2" in
                         A) cursor=$(( (cursor - 1 + n) % n )); redraw=1 ;;   # up
                         B) cursor=$(( (cursor + 1) % n )); redraw=1 ;;      # down
@@ -305,9 +305,11 @@ checklist_menu() {
     tput cnorm 2>/dev/null || printf '\e[?25h'
 
     MENU_RESULT=()
-    for ((i=0; i<n; i++)); do
-        [ "${selected[i]}" -eq 1 ] && MENU_RESULT+=("$i")
+    local _i
+    for ((_i=0; _i<n; _i++)); do
+        if [ "${selected[_i]}" -eq 1 ]; then MENU_RESULT+=("$_i"); fi
     done
+    return 0
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -763,20 +765,21 @@ main() {
     _is_selected 1 "${hsel[@]}" && setup_ssh_hardening
 
     # ─── Eksekusi instalasi aplikasi ───
-    # Docker pertama jika dipilih (karena dependensi)
+    # Docker pertama jika dipilih (karena dependensi). Guard || true agar
+    # satu aplikasi yang gagal/dilewati tidak menghentikan seluruh wizard.
     for i in "${MENU_RESULT[@]}"; do
-        [ "${APP_LABELS[i]}" = "Docker" ] && install_docker
+        if [ "${APP_LABELS[i]}" = "Docker" ]; then install_docker || log_warn "Docker gagal/terlewat"; fi
     done
     for i in "${MENU_RESULT[@]}"; do
         case "${APP_LABELS[i]}" in
             "Docker") ;; # sudah diinstall di atas
-            "Dokploy")    install_dokploy ;;
-            "Portainer")  install_portainer ;;
-            "CyberPanel") install_cyberpanel ;;
-            "CloudPanel") install_cloudpanel ;;
-            "FastPanel")  install_fastpanel ;;
-            "HestiaCP")   install_hestiacp ;;
-            "aaPanel")    install_aapanel ;;
+            "Dokploy")    install_dokploy    || log_warn "Dokploy gagal/terlewat" ;;
+            "Portainer")  install_portainer  || log_warn "Portainer gagal/terlewat" ;;
+            "CyberPanel") install_cyberpanel || log_warn "CyberPanel gagal/terlewat" ;;
+            "CloudPanel") install_cloudpanel || log_warn "CloudPanel gagal/terlewat" ;;
+            "FastPanel")  install_fastpanel  || log_warn "FastPanel gagal/terlewat" ;;
+            "HestiaCP")   install_hestiacp   || log_warn "HestiaCP gagal/terlewat" ;;
+            "aaPanel")    install_aapanel    || log_warn "aaPanel gagal/terlewat" ;;
         esac
     done
 
