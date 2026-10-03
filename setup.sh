@@ -152,9 +152,30 @@ detect_os() {
 # ──────────────────────────────────────────────────────────────────────────────
 #  Abstraksi package manager
 # ──────────────────────────────────────────────────────────────────────────────
+
+# Pada server (VPS/cloud), bootloader dikelola hypervisor sehingga grub-pc
+# tidak perlu (dan sering gagal) menjalankan grub-install ke device disk.
+# Pre-seed debconf agar grub-pc tidak memilih device install apa pun.
+debconf_skip_grub() {
+    [ "$PM" != "apt" ] && return 0
+    export DEBIAN_FRONTEND=noninteractive
+    # Tandai "tidak ada device install" -> postinst grub-pc melewati grub-install
+    echo 'grub-pc grub-pc/install_devices string' | debconf-set-selections 2>/dev/null || true
+    echo 'grub-pc grub-pc/install_devices_empty boolean true' | debconf-set-selections 2>/dev/null || true
+    # Pulihkan state dpkg yang setengah terkonfigurasi (mis. grub-pc gagal sebelumnya)
+    dpkg --configure -a 2>/dev/null || true
+}
+
 pkg_update() {
     case "$PM" in
-        apt)    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade ;;
+        apt)
+            debconf_skip_grub
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get -y \
+                -o Dpkg::Options::="--force-confold" \
+                -o Dpkg::Options::="--force-confdef" \
+                upgrade
+            ;;
         dnf)    dnf -y check-update 2>/dev/null || true; dnf -y upgrade ;;
         yum)    yum -y update ;;
         pacman) pacman -Syu --noconfirm ;;
@@ -668,6 +689,10 @@ main() {
         log_warn "Distro/package manager tidak dikenali. Script mungkin tidak berjalan optimal."
         confirm "Lanjutkan anyway?" "n" || exit 0
     fi
+
+    # Pada server apt/Debian, pre-seed agar grub-pc tidak menjalankan grub-install
+    # ke device disk (bootloader dikelola hypervisor). Diterapkan sebelum apt apapun.
+    debconf_skip_grub
 
     # 3. Update sistem
     if confirm "Lakukan update & upgrade sistem sekarang?" "y"; then
